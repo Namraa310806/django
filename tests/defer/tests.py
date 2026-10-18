@@ -33,6 +33,7 @@ class DeferTests(AssertionMixin, TestCase):
         cls.s1 = Secondary.objects.create(first="x1", second="y1")
         cls.p1 = Primary.objects.create(name="p1", value="xx", related=cls.s1)
         cls.p2 = Primary.objects.create(name="p2", value="yy", related=cls.s1)
+        cls.p3 = Primary.objects.create(name="p3", value="xx", related=cls.s1)
 
     def test_defer(self):
         qs = Primary.objects.all()
@@ -171,6 +172,7 @@ class DeferTests(AssertionMixin, TestCase):
             [
                 "p1",
                 "a new name",
+                "p3",
             ],
             lambda p: p.name,
             ordered=False,
@@ -207,7 +209,8 @@ class DeferTests(AssertionMixin, TestCase):
             self.assertEqual(primary.related_id, self.p1.related_id)
 
     def test_only_fetch_mode_fetch_peers(self):
-        p1, p2 = Primary.objects.fetch_mode(FETCH_PEERS).only("name")
+        qs = list(Primary.objects.fetch_mode(FETCH_PEERS).only("name"))
+        p1, p2 = qs[0], qs[1]
         with self.assertNumQueries(1):
             p1.value
         with self.assertNumQueries(0):
@@ -219,7 +222,8 @@ class DeferTests(AssertionMixin, TestCase):
             p1.value
 
     def test_defer_fetch_mode_fetch_peers(self):
-        p1, p2 = Primary.objects.fetch_mode(FETCH_PEERS).defer("value")
+        qs = list(Primary.objects.fetch_mode(FETCH_PEERS).defer("value"))
+        p1, p2 = qs[0], qs[1]
         with self.assertNumQueries(1):
             p1.value
         with self.assertNumQueries(0):
@@ -231,14 +235,16 @@ class DeferTests(AssertionMixin, TestCase):
             p1.value
 
     def test_defer_fk_fetch_mode_fetch_peers(self):
-        p1, p2 = Primary.objects.fetch_mode(FETCH_PEERS).defer("related")
+        qs = list(Primary.objects.fetch_mode(FETCH_PEERS).defer("related"))
+        p1, p2 = qs[0], qs[1]
         with self.assertNumQueries(2):
             self.assertEqual(p1.related, self.s1)
         with self.assertNumQueries(0):
             self.assertEqual(p2.related, self.s1)
 
     def test_only_fk_fetch_mode_fetch_peers(self):
-        p1, p2 = Primary.objects.fetch_mode(FETCH_PEERS).only("name")
+        qs = list(Primary.objects.fetch_mode(FETCH_PEERS).only("name"))
+        p1, p2 = qs[0], qs[1]
         with self.assertNumQueries(2):
             self.assertEqual(p1.related, self.s1)
         with self.assertNumQueries(0):
@@ -260,6 +266,65 @@ class DeferTests(AssertionMixin, TestCase):
         self.assertIsNone(cm.exception.__cause__)
         self.assertTrue(cm.exception.__suppress_context__)
 
+    def test_fetch_peers_preserves_local_modification(self):
+        qs = list(Primary.objects.fetch_mode(FETCH_PEERS).defer("value"))
+        p1, p2 = qs[0], qs[1]
+        # Modify the deferred field on one peer without saving.
+        p1.value = "local modification"
+        # Trigger the peer fetch by accessing the field on another peer.
+        _ = p2.value
+        # The local modification should be preserved.
+        self.assertEqual(p1.value, "local modification")
+        # The other peer should receive its database value.
+        self.assertEqual(p2.value, "yy")
+
+    def test_fetch_peers_deleted_peer_does_not_cause_keyerror(self):
+        qs = list(Primary.objects.fetch_mode(FETCH_PEERS).defer("value"))
+        p1, p2 = qs[0], qs[1]
+        # Delete one peer's database row after queryset evaluation.
+        Primary.objects.filter(pk=p1.pk).delete()
+        # Accessing another peer's deferred field should not raise KeyError.
+        _ = p2.value
+        # The surviving peer should receive the correct value.
+        self.assertEqual(p2.value, "yy")
+
+    def test_fetch_peers_accessed_instance_deleted(self):
+        qs = list(Primary.objects.fetch_mode(FETCH_PEERS).defer("value"))
+        p1 = qs[0]
+        # Delete the peer whose deferred field will be accessed.
+        Primary.objects.filter(pk=p1.pk).delete()
+        # Accessing the deleted instance's deferred field should raise
+        # DoesNotExist, consistent with FETCH_ONE behavior.
+        with self.assertRaises(Primary.DoesNotExist):
+            _ = p1.value
+
+    def test_fetch_peers_already_loaded_peers(self):
+        qs = list(Primary.objects.fetch_mode(FETCH_PEERS).defer("value"))
+        p1, p2 = qs[0], qs[1]
+        # Load the deferred field on one peer.
+        _ = p1.value
+        # Modify it.
+        p1.value = "modified after load"
+        # Trigger peer fetch on another peer.
+        _ = p2.value
+        # The already-loaded peer should not be overwritten.
+        self.assertEqual(p1.value, "modified after load")
+        self.assertEqual(p2.value, "yy")
+
+    def test_fetch_peers_batching_preserved(self):
+        # Ensure that ordinary peer fetching still works with batching.
+        qs = list(Primary.objects.fetch_mode(FETCH_PEERS).defer("value"))
+        p1, p2, p3 = qs[0], qs[1], qs[2]
+        with self.assertNumQueries(1):
+            _ = p1.value
+        with self.assertNumQueries(0):
+            _ = p2.value
+        with self.assertNumQueries(0):
+            _ = p3.value
+        self.assertEqual(p1.value, "xx")
+        self.assertEqual(p2.value, "yy")
+        self.assertEqual(p3.value, "xx")
+
 
 class DeferOtherDatabaseTests(TestCase):
     databases = {"other"}
@@ -273,9 +338,13 @@ class DeferOtherDatabaseTests(TestCase):
         cls.p2 = Primary.objects.using("other").create(
             name="p2", value="yy", related=cls.s1
         )
+        cls.p3 = Primary.objects.using("other").create(
+            name="p3", value="xx", related=cls.s1
+        )
 
     def test_defer_fetch_mode_fetch_peers(self):
-        p1, p2 = Primary.objects.using("other").fetch_mode(FETCH_PEERS).defer("value")
+        qs = list(Primary.objects.using("other").fetch_mode(FETCH_PEERS).defer("value"))
+        p1, p2 = qs[0], qs[1]
         with self.assertNumQueries(1, using="other"):
             p1.value
         with self.assertNumQueries(0, using="other"):

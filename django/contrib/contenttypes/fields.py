@@ -288,7 +288,7 @@ class GenericForeignKeyDescriptor:
                 rel_obj._state.fetch_mode = instance._state.fetch_mode
         self.field.set_cached_value(instance, rel_obj)
 
-    def fetch_many(self, instances):
+    def fetch_many(self, instances, accessed_instance=None):
         is_cached = self.field.is_cached
         missing_instances = [i for i in instances if not is_cached(i)]
         return prefetch_related_objects(missing_instances, self.field.name)

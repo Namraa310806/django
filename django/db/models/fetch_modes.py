@@ -35,7 +35,7 @@ class FetchPeers(FetchMode):
             if (peer := peer_weakref()) is not None
         ]
         if len(instances) > 1:
-            fetcher.fetch_many(instances)
+            fetcher.fetch_many(instances, instance)
         else:
             fetcher.fetch_one(instance)
 

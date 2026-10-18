@@ -286,7 +286,7 @@ class ForwardManyToOneDescriptor:
         if not remote_field.multiple:
             remote_field.set_cached_value(rel_obj, instance)
 
-    def fetch_many(self, instances):
+    def fetch_many(self, instances, accessed_instance=None):
         is_cached = self.is_cached
         missing_instances = [i for i in instances if not is_cached(i)]
         prefetch_related_objects(missing_instances, self.field.name)
@@ -568,7 +568,7 @@ class ReverseOneToOneDescriptor:
             self.related.field.set_cached_value(rel_obj, instance)
         self.related.set_cached_value(instance, rel_obj)
 
-    def fetch_many(self, instances):
+    def fetch_many(self, instances, accessed_instance=None):
         is_cached = self.is_cached
         missing_instances = [i for i in instances if not is_cached(i)]
         prefetch_related_objects(

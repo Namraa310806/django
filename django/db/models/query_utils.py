@@ -296,16 +296,30 @@ class DeferredAttribute:
     def fetch_one(self, instance):
         instance.refresh_from_db(fields=[self.field.attname])
 
-    def fetch_many(self, instances):
+    def fetch_many(self, instances, accessed_instance=None):
         attname = self.field.attname
         db = instances[0]._state.db
+        # Only fetch for instances that don't already have the field loaded
+        # and have a primary key.
+        missing_instances = [
+            i for i in instances
+            if attname not in i.__dict__ and i._is_pk_set()
+        ]
+        if not missing_instances:
+            return
         value_by_pk = (
             self.field.model._base_manager.using(db)
             .values_list(attname, flat=True)
-            .in_bulk({i.pk for i in instances})
+            .in_bulk({i.pk for i in missing_instances})
         )
-        for instance in instances:
-            setattr(instance, attname, value_by_pk[instance.pk])
+        for instance in missing_instances:
+            # Only set the value if the row still exists in the database.
+            if instance.pk in value_by_pk:
+                setattr(instance, attname, value_by_pk[instance.pk])
+            elif instance is accessed_instance:
+                # If the accessed instance itself is missing from the database,
+                # fall back to fetch_one to raise DoesNotExist.
+                self.fetch_one(instance)
 
 
 class class_or_instance_method:
