@@ -533,6 +533,13 @@ class BaseCacheTests:
 
         self.assertIs(cache.touch("nonexistent"), False)
 
+    @retry()
+    def test_touch_expired(self):
+        cache.set("expire_key", "value", timeout=1)
+        time.sleep(2)
+        self.assertIs(cache.touch("expire_key", timeout=60), False)
+        self.assertIsNone(cache.get("expire_key"))
+
     def test_unicode(self):
         # Unicode values can be cached
         stuff = {
